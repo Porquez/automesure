@@ -1,6 +1,6 @@
 # coding: utf-8 
 import sys
-from flask import Flask
+from flask import Flask, render_template, request, url_for, send_file, redirect
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 import json
@@ -9,6 +9,29 @@ from datetime import datetime, timedelta
 import tkinter as tk
 from tkinter import messagebox
 import csv
+import bluetooth
+import pytesseract
+import cv2
+
+#import keras
+#from keras.datasets import emnist
+
+#(x_train, y_train), (x_test, y_test) = emnist.load_data(type='letters')
+
+import numpy as np
+import cv2
+
+# Normalisation des données
+#x_train = x_train.astype('float32') / 255
+#x_test = x_test.astype('float32') / 255
+
+# Redimensionnement des données
+#x_train = np.expand_dims(x_train, axis=-1)
+#x_test = np.expand_dims(x_test, axis=-1)
+
+# Redimensionnement des étiquettes
+#y_train = keras.utils.to_categorical(y_train, 26)
+#y_test = keras.utils.to_categorical(y_test, 26)
 
 if len(sys.argv) > 1:
     id_patient = sys.argv[1]
@@ -27,6 +50,10 @@ class Application(tk.Frame):
         self.pack()
         self.create_status_bar()
         label = tk.Label(self, text="tensiometre")
+
+        # Liste des patients
+        self.patients = []
+        self.index_patient = -1
 
         #Creation des widgets pour le formulaire de creation de patient
         if id_patient:
@@ -60,25 +87,6 @@ class Application(tk.Frame):
             self.entry_date_naissance.insert(0, patient['date_naissance'])
             self.entry_age.insert(0, patient['age'])
             self.entry_antecedents.insert(0, patient['antecedents'])
-            #self.btn_enregistrer = tk.Button(self, text="Enregistrer", command=self.modifier_patient)
-        #else:
-            #Les zones de saisie sont vides
-            #self.btn_enregistrer = tk.Button(self, text="Enregistrer", command=self.creer_patient, state='disabled')
-
-        #Placer les widgets dans la fenetre
-        #self.label_id_patient.grid(row=0, column=0)
-        #self.entry_id_patient.grid(row=0, column=1)
-        #self.label_nom.grid(row=1, column=0)
-        #self.entry_nom.grid(row=1, column=1)
-        ##self.label_prenom.grid(row=1, column=0)
-        #self.entry_prenom.grid(row=1, column=1)
-        #self.label_date_naissance.grid(row=2, column=0)
-        ##self.entry_date_naissance.grid(row=2, column=1)
-        #self.label_age.grid(row=2, column=0)
-        #self.entry_age.grid(row=2, column=1)
-        #self.label_antecedents.grid(row=2, column=0)
-        #self.entry_antecedents.grid(row=2, column=1)
-        #self.btn_enregistrer.grid(row=3, column=1)
 
         #Creation des widgets pour le formulaire de creation nouvelle tension
         self.label_sys = tk.Label(self, text="Tension Systolique")
@@ -89,6 +97,11 @@ class Application(tk.Frame):
         self.entry_pou = tk.Entry(self)
 
         self.bouton_creer_patient = tk.Button(self, text="Enregistrer patient", command=lambda: Patient.creer_patient(db, self.entry_id_patient.get(), self.entry_nom.get(), self.entry_prenom.get(), self.entry_date_naissance.get(),self.entry_age.get(),self.entry_antecedents.get()))
+        self.bouton_supprimer_patient = tk.Button(self, text="Supprimer patient", command=lambda: Patient.supprimer_patient(self, db, self.entry_id_patient.get()))
+
+        self.button_precedent = tk.Button(self, text="<", command=lambda: Patient.precedent_patient(self, db, self.entry_id_patient.get()))
+        self.button_suivant = tk.Button(self, text=">",command=lambda: Patient.suivant_patient(self,db, self.entry_id_patient.get()))
+    
         self.bouton_creer_tension = tk.Button(self, text="Creer un nouveau releve de la tension", command=lambda: Tension.creer_tension(db, self.entry_id_patient.get(), self.entry_sys.get(),self.entry_dia.get(),self.entry_pou.get()))
         self.bouton_edition = tk.Button(self, text="Edition releve medecin", command=lambda: Patient.generer_pdf_medecin(db, self.entry_id_patient.get()))
 
@@ -106,8 +119,11 @@ class Application(tk.Frame):
         self.label_antecedents.pack()
         self.entry_antecedents.pack()
         self.bouton_creer_patient.pack()
-
+        self.bouton_supprimer_patient.pack()
+        self.button_precedent.pack()
+        self.button_suivant.pack()
         self.label_sys.pack()
+
         self.entry_sys.pack()
         self.label_dia.pack()
         self.entry_dia.pack()
@@ -122,6 +138,14 @@ class Application(tk.Frame):
         self.bouton_commentaire.pack(side=tk.LEFT)
         self.texte_commentaire = tk.Text(self, width=100 , height=18)
         self.texte_commentaire.pack(side=tk.LEFT)
+
+        # Bouton pour se connecter à l'appareil HONOR Band 5
+        self.bt_connect = tk.Button(self, text="Connecter HONOR Band 5", command=self.connecter_honor_band)
+        self.bt_connect.pack()
+
+        # Zone de texte pour afficher les informations de l'appareil
+        self.text_info = tk.Text(self)
+        self.text_info.pack()
 
     def create_status_bar(self):
         self.status_bar = tk.Label(self, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
@@ -142,6 +166,49 @@ class Application(tk.Frame):
         for ligne in lignes:
             self.texte_commentaire.insert(tk.END, ", ".join(ligne) + "\n")
 
+    def connecter_honor_band(self):
+        # Adresse MAC de l'appareil HONOR Band 5
+        address = "F0:C4:2F:45:9A:2E"
+
+        try:
+            # Connexion à l'appareil via Bluetooth
+            socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+            socket.connect((address, 1))
+
+            # Envoyer une commande pour récupérer les informations (BPM, SpO2) de l'appareil
+            socket.send(b'get_data')
+            data = socket.recv(1024).decode()
+
+            # Afficher les informations dans la zone de texte
+            self.text_info.insert(tk.END, f"Informations de l'appareil HONOR Band 5:\n{data}\n")
+        except:
+            self.text_info.insert(tk.END, "Erreur lors de la connexion a appareil HONOR Band 5.\n")
+
+    def analyser_image_tension(image_path):
+        # Chargement de l'image en niveaux de gris
+        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+
+        # Application d'un filtre pour améliorer la qualité de l'image
+        img = cv2.medianBlur(img, 3)
+
+        # Application de la reconnaissance optique de caractères (OCR) à l'aide de Pytesseract
+        tess_config = '--psm 6'  # Utiliser le mode de segmentation de ligne pour les nombres séparés
+        text = pytesseract.image_to_string(img, config=tess_config)
+
+        # Analyse du texte pour extraire les valeurs de tension systolique, diastolique et du pouls
+        sys = dia = pouls = None
+        for word in text.split():
+            if word.isdigit():
+                if sys is None:
+                    sys = int(word)
+                elif dia is None:
+                    dia = int(word)
+                elif pouls is None:
+                    pouls = int(word)
+                    break
+
+        return sys, dia, pouls
+
 # Classe pour la gestion des donnees patient
 class Patient:
     def __init__(self, id_patient, nom, prenom, date_naissance, age, antecedents):
@@ -156,25 +223,88 @@ class Patient:
     def creer_patient(db, id_patient, nom, prenom, date_naissance, age, antecedents):
         # Inserer le nouveau patient dans la base de donnees
         patient = Patient(id_patient, nom, prenom, date_naissance, age, antecedents)
-        db.patients.insert_one({
-            "id_patient": patient.id_patient,
-            "nom": patient.nom,
-            "prenom": patient.prenom,
-            "date_naissance": patient.date_naissance,
-            "age": patient.age,
-            "antecedents": patient.antecedents
-        })
-        messagebox.showinfo("Confirmation", f"patient { id_patient } creee.")
-
+        if patient:
+            patient2 = db.patients.find_one({"id_patient": patient.id_patient})
+            if not patient2:
+                db.patients.insert_one({
+                    "id_patient": patient.id_patient,
+                    "nom": patient.nom,
+                    "prenom": patient.prenom,
+                    "date_naissance": patient.date_naissance,
+                    "age": patient.age,
+                    "antecedents": patient.antecedents
+                })
+                messagebox.showinfo("Confirmation", f"patient { id_patient } creee.")
+            else:
+                patient.modifier_patient(db, id_patient, nom, prenom, date_naissance, age, antecedents)
     @staticmethod
     def modifier_patient(db, id_patient, nom, prenom, date_naissance, age, antecedents):
-        db.patients.update_one({"id_patient": id_patient},
-                                {"$set": {"nom": nom,
-                                            "prenom": prenom,
-                                            "date_naissance": date_naissance,
-                                            "age": age,
-                                            "antecedents": antecedents}})
-        messagebox.showinfo("Confirmation", f"patient { id_patient } modifiee.")
+        if id_patient:
+            db.patients.update_one({"id_patient": id_patient},
+                                    {"$set": {"nom": nom,
+                                                "prenom": prenom,
+                                                "date_naissance": date_naissance,
+                                                "age": age,
+                                                "antecedents": antecedents}})
+            messagebox.showinfo("Confirmation", f"patient { id_patient } modifiee.")
+
+    @staticmethod
+    def supprimer_patient(self, db, id_patient):
+        
+        # Vérifier si le patient existe
+        patient = db.patients.find_one({"id_patient": id_patient})
+        if not patient:
+            messagebox.showerror("Erreur", f"Le patient {id_patient} est inexistant.")
+            return
+
+        # Vérifier si le patient a des tensions enregistrées
+        tensions = list(db.tensions.find({"id_patient": id_patient}))
+        if tensions:
+            if not messagebox.askyesno("Confirmation", f"Le patient {id_patient} a des tensions enregistrees. Etes-vous certain de vouloir le supprimer ?"):
+                return
+
+        # Supprimer le patient
+        db.patients.delete_one({"id_patient": id_patient})
+        messagebox.showinfo("Succes", f"Le patient {id_patient} a ete supprime avec succes.")
+
+        # Effacer les champs de saisie
+        self.entry_id_patient.delete(0, tk.END)
+        self.entry_nom.delete(0, tk.END)
+        self.entry_prenom.delete(0, tk.END)
+        self.entry_age.delete(0, tk.END)
+        self.entry_date_naissance.delete(0, tk.END)
+        self.entry_antecedents.delete(0, tk.END)
+    
+    @staticmethod
+    def patient_precedent(self, db, id_patient):
+        if self.index_patient > 0:
+            self.index_patient -= 1
+            self.afficher_patient(self,db,id_patient)
+
+    @staticmethod
+    def patient_suivant(self, db, id_patient):
+        if self.index_patient < len(self.patients) - 1:
+            self.index_patient += 1
+            self.afficher_patient(self,db,id_patient) 
+    
+    @staticmethod
+    def afficher_patient(self, db, id_patient):
+        # Recuperer les informations du patient dans la base de donnees
+        patient = db.patients.find_one({"id_patient": id_patient})
+        # Mettre a jour les widgets avec les informations du patient
+
+        self.entry_id_patient.delete(0, tk.END)
+        self.entry_id_patient.insert(0, patient.get("id_patient", ""))
+        self.entry_nom.delete(0, tk.END)
+        self.entry_nom.insert(0, patient.get("nom", ""))
+        self.entry_prenom.delete(0, tk.END)
+        self.entry_prenom.insert(0, patient.get("prenom", ""))
+        self.entry_age.delete(0, tk.END)
+        self.entry_age.insert(0, patient.get("age", ""))
+        self.entry_date_naissance.delete(0, tk.END)
+        self.entry_date_naissance.insert(0, patient.get("date_naissance", ""))
+        self.entry_antecedents.delete(0, tk.END)
+        self.entry_antecedents.insert(0, patient.get("antecedents", ""))
 
     @staticmethod
     @app.route("/medecin/generer_pdf/<id_patient>")
@@ -182,7 +312,7 @@ class Patient:
 
         #patient = Patient.objects.get(id_patient).first()
         patient = db.patients.find_one({"id_patient": id_patient})
-
+        
         # Date limite inferieure
         limite_inf = datetime.now() - timedelta(days=3)
         # Date limite superieure
@@ -193,12 +323,16 @@ class Patient:
         collection = db["tensions"]
         tensions = collection.find({"id_patient": id_patient, "date_heure": {"$gte": limite_inf, "$lt": limite_sup}})
         
+        #generer_pdf_medecin(patient.nom, patient.prenom, "du 01/01/2023 au 03/01/2023", "Commentaires pour le médecin", tensions, nom_fichier)
         # Creer un objet Canvas pour generer le PDF
         pdf = canvas.Canvas("releve_automesure_tensionnelle.pdf", pagesize=A4)
         
         # Afficher les informations du patient et la periode du releve en haut a droite
         nom_patient = patient['nom']
         prenom_patient = patient['prenom']
+
+        nom_fichier = f"releve_automesure_tensionnelle_{nom_patient}_{prenom_patient}.pdf"
+
         periode = f"{limite_inf.date()} - {limite_sup.date()}"
         pdf.drawString(A4[0]-250, A4[1]-50, f"Patient : {nom_patient} {prenom_patient}")
         pdf.drawString(A4[0]-250, A4[1]-70, f"Periode : {periode}")
@@ -240,7 +374,7 @@ class Patient:
 
         # Sauvegarder le PDF et renvoyer une reponse au client
         pdf.save()
-        #return send_file("releve_automesure_tensionnelle.pdf", as_attachment=True)        
+        #return redirect(url_for('download_pdf', nom_fichier=nom_fichier))
 
 # Classe pour la gestion des donnees de la tension
 class Tension:
@@ -267,8 +401,8 @@ class Tension:
         if derniere_tension is not None:
             if 'date_heure' in derniere_tension:
                 duree = (datetime.now() - derniere_tension['date_heure']).total_seconds() // 60
-                if duree < 1:
-                    messagebox.showerror("Erreur", "Tension deja prise il y a moins d'une minute")
+                if duree < 2:
+                    messagebox.showerror("Erreur", "Tension deja prise il y a moins de {duree} minute(s)")
                     return
         #heure_minute = date_heure.strftime("%H:%M")  # calcul de la colonne heure_minute
         # Inserer la nouvelle tension dans la base de donnees
@@ -382,6 +516,13 @@ if __name__ == '__main__':
    
     insert_patient(db,patient)
     insert_tension(db,patient, tension1.sys, tension1.dia, tension1.pouls)
+
+    # Recherche des appareils Bluetooth disponibles à proximité
+    #devices = bluetooth.discover_devices()
+
+    # Affichage de la liste des appareils
+    #for device in devices:
+        #print(f"Device name: {bluetooth.lookup_name(device)}, MAC address: {device}")
 
     root = tk.Tk()
     app = Application(root,id_patient)
