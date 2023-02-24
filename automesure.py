@@ -1,4 +1,5 @@
 # coding: utf-8 
+import sys
 from flask import Flask
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -9,18 +10,34 @@ import tkinter as tk
 from tkinter import messagebox
 import csv
 
+if len(sys.argv) > 1:
+    id_patient = sys.argv[1]
+else:
+    id_patient = None
+
 app = Flask(__name__)
 
 #Fenetre Tkinter
 class Application(tk.Frame):
-    def __init__(self, parent, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs)
+    def __init__(self, parent, id_patient=None, *args, **kwargs):
+        super().__init__(parent, id_patient=None, *args, **kwargs)
         self.master.title("Automesure Tensionnelle")
         self.master.geometry("800x800")
 
+        self.pack()
+        self.create_status_bar()
         label = tk.Label(self, text="tensiometre")
 
         #Creation des widgets pour le formulaire de creation de patient
+        if id_patient:
+            self.id_patient = id_patient
+            patient = db.patients.find_one({"id_patient": self.id_patient})
+            self.create_widgets(patient)
+        else:
+            self.id_patient = None
+            self.create_widgets()
+      
+    def create_widgets(self,patient=None):
         self.label_id_patient = tk.Label(self, text="id patient")
         self.entry_id_patient = tk.Entry(self)
         self.label_nom = tk.Label(self, text="Nom")
@@ -33,6 +50,35 @@ class Application(tk.Frame):
         self.entry_age = tk.Entry(self)
         self.label_antecedents = tk.Label(self, text="Antecedents")
         self.entry_antecedents = tk.Entry(self)
+        
+        #Verification si le patient existe
+        if patient:
+            #Afficher les informations du patient existant
+            self.entry_id_patient.insert(0, patient['id_patient'])
+            self.entry_nom.insert(0, patient['nom'])
+            self.entry_prenom.insert(0, patient['prenom'])
+            self.entry_date_naissance.insert(0, patient['date_naissance'])
+            self.entry_age.insert(0, patient['age'])
+            self.entry_antecedents.insert(0, patient['antecedents'])
+            #self.btn_enregistrer = tk.Button(self, text="Enregistrer", command=self.modifier_patient)
+        #else:
+            #Les zones de saisie sont vides
+            #self.btn_enregistrer = tk.Button(self, text="Enregistrer", command=self.creer_patient, state='disabled')
+
+        #Placer les widgets dans la fenetre
+        #self.label_id_patient.grid(row=0, column=0)
+        #self.entry_id_patient.grid(row=0, column=1)
+        #self.label_nom.grid(row=1, column=0)
+        #self.entry_nom.grid(row=1, column=1)
+        ##self.label_prenom.grid(row=1, column=0)
+        #self.entry_prenom.grid(row=1, column=1)
+        #self.label_date_naissance.grid(row=2, column=0)
+        ##self.entry_date_naissance.grid(row=2, column=1)
+        #self.label_age.grid(row=2, column=0)
+        #self.entry_age.grid(row=2, column=1)
+        #self.label_antecedents.grid(row=2, column=0)
+        #self.entry_antecedents.grid(row=2, column=1)
+        #self.btn_enregistrer.grid(row=3, column=1)
 
         #Creation des widgets pour le formulaire de creation nouvelle tension
         self.label_sys = tk.Label(self, text="Tension Systolique")
@@ -42,7 +88,7 @@ class Application(tk.Frame):
         self.label_pou = tk.Label(self, text="Pouls")
         self.entry_pou = tk.Entry(self)
 
-        self.bouton_creer_patient = tk.Button(self, text="Creer un nouveau patient", command=lambda: Patient.creer_patient(db, self.entry_id_patient.get(), self.entry_nom.get(), self.entry_prenom.get(), self.entry_date_naissance.get(),self.entry_age.get(),self.entry_antecedents.get()))
+        self.bouton_creer_patient = tk.Button(self, text="Enregistrer patient", command=lambda: Patient.creer_patient(db, self.entry_id_patient.get(), self.entry_nom.get(), self.entry_prenom.get(), self.entry_date_naissance.get(),self.entry_age.get(),self.entry_antecedents.get()))
         self.bouton_creer_tension = tk.Button(self, text="Creer un nouveau releve de la tension", command=lambda: Tension.creer_tension(db, self.entry_id_patient.get(), self.entry_sys.get(),self.entry_dia.get(),self.entry_pou.get()))
         self.bouton_edition = tk.Button(self, text="Edition releve medecin", command=lambda: Patient.generer_pdf_medecin(db, self.entry_id_patient.get()))
 
@@ -74,8 +120,12 @@ class Application(tk.Frame):
         # Creation d'un bouton et d'une zone de texte pour le commentaire
         self.bouton_commentaire = tk.Button(self, text="Commentaire", command=self.afficher_commentaire)
         self.bouton_commentaire.pack(side=tk.LEFT)
-        self.texte_commentaire = tk.Text(self, width=80 , height=20)
+        self.texte_commentaire = tk.Text(self, width=100 , height=18)
         self.texte_commentaire.pack(side=tk.LEFT)
+
+    def create_status_bar(self):
+        self.status_bar = tk.Label(self, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
     def afficher_commentaire(self):
         # Ouverture du fichier CSV et lecture des 10 premieres lignes
@@ -104,11 +154,6 @@ class Patient:
 
     @staticmethod
     def creer_patient(db, id_patient, nom, prenom, date_naissance, age, antecedents):
-        # Verifier si le patient existe deja dans la base de donnees
-        if db.patients.find_one({"id_patient": id_patient}):
-            messagebox.showerror("Erreur", "Un patient avec cet identifiant existe deja")
-            return
-
         # Inserer le nouveau patient dans la base de donnees
         patient = Patient(id_patient, nom, prenom, date_naissance, age, antecedents)
         db.patients.insert_one({
@@ -119,7 +164,17 @@ class Patient:
             "age": patient.age,
             "antecedents": patient.antecedents
         })
-        messagebox.showinfo("Confirmation", f"patient { id_patient } enregistree.")
+        messagebox.showinfo("Confirmation", f"patient { id_patient } creee.")
+
+    @staticmethod
+    def modifier_patient(db, id_patient, nom, prenom, date_naissance, age, antecedents):
+        db.patients.update_one({"id_patient": id_patient},
+                                {"$set": {"nom": nom,
+                                            "prenom": prenom,
+                                            "date_naissance": date_naissance,
+                                            "age": age,
+                                            "antecedents": antecedents}})
+        messagebox.showinfo("Confirmation", f"patient { id_patient } modifiee.")
 
     @staticmethod
     @app.route("/medecin/generer_pdf/<id_patient>")
@@ -149,7 +204,7 @@ class Patient:
         pdf.drawString(A4[0]-250, A4[1]-70, f"Periode : {periode}")
         
         # Afficher les commentaires pour le medecin en haut a gauche
-        commentaires = "Aucun commentaires pour le moment"
+        commentaires = "Aucun commentaire pour le moment"
         pdf.drawString(50, A4[1]-50, "Commentaires pour le medecin :")
         pdf.drawString(50, A4[1]-70, commentaires)
         
@@ -220,8 +275,7 @@ class Tension:
         tension = Tension(sys, dia, pouls, id_patient, date_heure )
         collection.insert_one({"id_patient": id_patient, "date_heure": date_heure, "tension": tension.__dict__})
         messagebox.showinfo("Confirmation", f"Tension enregistree a {date_heure}.")
-        afficher_commentaire
-
+     
 # Fonction pour se connecter a la base de donnees mongodb
 def connect_to_db():
     with open(r"config.json") as f:
@@ -272,7 +326,7 @@ def generer_fiche_releve(db,patient,date):
     with open(f"releve_{date.strftime('%Y%m%d')}.txt", "w") as file:
         file.write(fiche)
 
-
+#Fonction pour generer la fiche de releve des mesures de la tension pour le medecin
 def generer_pdf_medecin(id_patient):
 
     patient = Patient.objects(id=id_patient).first()
@@ -330,7 +384,7 @@ if __name__ == '__main__':
     insert_tension(db,patient, tension1.sys, tension1.dia, tension1.pouls)
 
     root = tk.Tk()
-    app = Application(root)
+    app = Application(root,id_patient)
     app.pack()
     
     show_last_tension(db,patient)
