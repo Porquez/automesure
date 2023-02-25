@@ -99,8 +99,8 @@ class Application(tk.Frame):
         self.bouton_creer_patient = tk.Button(self, text="Enregistrer patient", command=lambda: Patient.creer_patient(db, self.entry_id_patient.get(), self.entry_nom.get(), self.entry_prenom.get(), self.entry_date_naissance.get(),self.entry_age.get(),self.entry_antecedents.get()))
         self.bouton_supprimer_patient = tk.Button(self, text="Supprimer patient", command=lambda: Patient.supprimer_patient(self, db, self.entry_id_patient.get()))
 
-        self.button_precedent = tk.Button(self, text="<", command=lambda: Patient.precedent_patient(self, db, self.entry_id_patient.get()))
-        self.button_suivant = tk.Button(self, text=">",command=lambda: Patient.suivant_patient(self,db, self.entry_id_patient.get()))
+        self.button_precedent = tk.Button(self, text="<", command=lambda: Patient.patient_precedent(self, db, self.entry_id_patient.get()))
+        self.button_suivant = tk.Button(self, text=">",command=lambda: Patient.patient_suivant(self, db, self.entry_id_patient.get()))
     
         self.bouton_creer_tension = tk.Button(self, text="Creer un nouveau releve de la tension", command=lambda: Tension.creer_tension(db, self.entry_id_patient.get(), self.entry_sys.get(),self.entry_dia.get(),self.entry_pou.get()))
         self.bouton_edition = tk.Button(self, text="Edition releve medecin", command=lambda: Patient.generer_pdf_medecin(db, self.entry_id_patient.get()))
@@ -206,7 +206,6 @@ class Application(tk.Frame):
                 elif pouls is None:
                     pouls = int(word)
                     break
-
         return sys, dia, pouls
 
 # Classe pour la gestion des donnees patient
@@ -250,8 +249,7 @@ class Patient:
 
     @staticmethod
     def supprimer_patient(self, db, id_patient):
-        
-        # Vérifier si le patient existe
+         # Vérifier si le patient existe
         patient = db.patients.find_one({"id_patient": id_patient})
         if not patient:
             messagebox.showerror("Erreur", f"Le patient {id_patient} est inexistant.")
@@ -277,22 +275,26 @@ class Patient:
     
     @staticmethod
     def patient_precedent(self, db, id_patient):
-        if self.index_patient > 0:
-            self.index_patient -= 1
-            self.afficher_patient(self,db,id_patient)
+        # Récupérer l'ID du patient precedent
+        patient_precedent = db.patients.find_one({"id_patient": {"$lt": id_patient}}, sort=[("id_patient", -1)])
+        # Afficher les informations du patient precedent
+        if patient_precedent:
+            Patient.afficher_patient(self,db, patient_precedent.get("id_patient"))
 
     @staticmethod
-    def patient_suivant(self, db, id_patient):
-        if self.index_patient < len(self.patients) - 1:
-            self.index_patient += 1
-            self.afficher_patient(self,db,id_patient) 
-    
+    def patient_suivant(self,db, id_patient):
+        # Récupérer l'ID du patient suivant
+        patient_suivant = db.patients.find_one({"id_patient": {"$gt": id_patient}}, sort=[("id_patient", 1)])
+        # Afficher les informations du patient suivant
+        if patient_suivant:
+            Patient.afficher_patient(self,db, patient_suivant.get("id_patient"))
+
     @staticmethod
-    def afficher_patient(self, db, id_patient):
+    def afficher_patient(self,db, id_patient):
         # Recuperer les informations du patient dans la base de donnees
         patient = db.patients.find_one({"id_patient": id_patient})
-        # Mettre a jour les widgets avec les informations du patient
 
+        # Mettre a jour les widgets avec les informations du patient
         self.entry_id_patient.delete(0, tk.END)
         self.entry_id_patient.insert(0, patient.get("id_patient", ""))
         self.entry_nom.delete(0, tk.END)
